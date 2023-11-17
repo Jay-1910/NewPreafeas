@@ -5,7 +5,7 @@ from PIL import Image
 import base64
 
 st.set_page_config(
-    page_title="PreFeas",
+    page_title="GeoProspectivity360",
     page_icon="🌍",
     layout="wide"
 )
@@ -74,7 +74,7 @@ def set_header_image_image_background(png_file1, png_file2):
     st.markdown(header_bg_img, unsafe_allow_html=True)
     
 set_page_background('blue.jpg')
-set_header_image_image_background('DTA Logo.png', "prefeas.png")
+set_header_image_image_background('DTA Logo.png', "geopros360.png")
 
 custom_css = """
 <style>

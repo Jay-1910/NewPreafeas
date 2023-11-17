@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Critical Minerals Project Demo</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    </style>
+</head>
+
+<body>
+<script src="https://unpkg.com/three@0.126.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.126.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://npmcdn.com/@turf/turf/turf.min.js"></script> <!-- to compute the centroid of the polygon for popup coordination-->>
+
+<!--style for popup-->
+<style>
+    .mapboxgl-popup {
+        max-width: 400px;
+        font: 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+    }
+</style>
+
+<!--style for filter menu-->
+<style>
+    #menu {
+    background: #fff;
+    position: absolute;
+    z-index: 1;
+    top: 10px;
+    right: 10px;
+    border-radius: 3px;
+    width: 120px;
+    border: 1px solid rgba(0, 0, 0, 0.4);
+    font-family: 'Open Sans', sans-serif;
+    }
+        
+    #menu a {
+    font-size: 13px;
+    color: #404040;
+    display: block;
+    margin: 0;
+    padding: 0;
+    padding: 10px;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+    text-align: center;
+    }
+        
+    #menu a:last-child {
+    border: none;
+    }
+        
+    #menu a:hover {
+    background-color: #f8f8f8;
+    color: #404040;
+    }
+        
+    #menu a.active {
+    background-color: #3887be;
+    color: #ffffff;
+    }
+        
+    #menu a.active:hover {
+    background: #3074a4;
+    }
+
+
+    /* CSS code to beautify the checkbox */
+    .checkbox-container {
+        background: #3887be;
+        position: absolute;
+        z-index: 1;
+        bottom: 25px;
+        right: 10px;
+    }
+
+    .checkbox-label {
+      margin-left: 8px;
+      font-size: 16px;
+      color: #fff;
+    }
+
+    .custom-checkbox:checked {
+      background-color: #2196F3;
+      border-color: #2196F3;
+    }
+
+    .custom-checkbox:checked::before {
+      content: '\2713';
+      font-size: 12px;
+      color: #fff;
+      position: absolute;
+      top: 1px;
+      left: 4px;
+    }
+
+</style>
+
+<nav id="menu"></nav>
+<div id="map"></div>
+<div class="checkbox-container">
+    <label for="checkbox" class="checkbox-label">Tick to see radar circles</label>
+    <input type="checkbox" id="checkbox" class="custom-checkbox">
+</div>
+
+ 
+<script>
+	mapboxgl.accessToken = 'pk.eyJ1IjoieWluaGFvLWR0YSIsImEiOiJjbGp4d3k0eHAxenRiM3NtaTkxYXIxNngzIn0.UNpYLjZs3rvXN8UVYUShTg';
+    const map = new mapboxgl.Map({
+        container: 'map', // container ID
+        
+        // Choose from Mapbox's core styles, or make your own style with Mapbox Studio
+        
+        // style: 'mapbox://styles/mapbox/light-v11',
+        // style: 'mapbox://styles/mapbox/outdoors-v12',
+        // style: 'mapbox://styles/mapbox/dark-v11',
+        style:"mapbox://styles/mapbox/satellite-streets-v12", // wired! 3D model can be shown on this map style
+        // style: 'mapbox://styles/mapbox/satellite-v9', // 3D model cannot show on this map style
+
+
+        projection: 'globe', // Display the map as a globe, since satellite-v9 defaults to Mercator
+        zoom: 4, // starting zoom
+        center: [135, -30], // // starting center in [lng, lat]
+        // pitch: 60,
+        antialias: true // create the gl context with MSAA antialiasing, so custom layers are antialiased
+    });
+
+   
+    map.addControl(new mapboxgl.ScaleControl());  // Add a scale control to the map
+
+
+     /* add a 3D model as test
+    Use a custom style layer with three.js to add a 3D model to the map.
+    An alternative example using threebox to abstract three.js is available at Add a 3D model with threebox.
+    Reference: https://docs.mapbox.com/mapbox-gl-js/example/add-3d-model/
+    */
+   
+    // parameters to ensure the model is georeferenced correctly on the map
+    const modelOrigin = [138.599996, -34.928660];
+    const modelAltitude = 0;
+    const modelRotate = [Math.PI / 2, 0, 0];
+    
+    const modelAsMercatorCoordinate = mapboxgl.MercatorCoordinate.fromLngLat(
+        modelOrigin,
+        modelAltitude
+    );
+    
+    // transformation parameters to position, rotate and scale the 3D model onto the map
+    const modelTransform = {
+        translateX: modelAsMercatorCoordinate.x,
+        translateY: modelAsMercatorCoordinate.y,
+        translateZ: modelAsMercatorCoordinate.z,
+        rotateX: modelRotate[0],
+        rotateY: modelRotate[1],
+        rotateZ: modelRotate[2],
+        /* Since the 3D model is in real world meters, a scale transform needs to be
+        * applied since the CustomLayerInterface expects units in MercatorCoordinates.
+        */
+        scale: modelAsMercatorCoordinate.meterInMercatorCoordinateUnits()
+    };
+    
+    const THREE = window.THREE;
+    
+    // configuration of the custom layer for a 3D model per the CustomLayerInterface
+    const customLayer = {
+        id: '3d-model',
+        type: 'custom',
+        renderingMode: '3d',
+        onAdd: function (map, gl) {
+            this.camera = new THREE.Camera();
+            this.scene = new THREE.Scene();
+            
+            // create two three.js lights to illuminate the model
+            const directionalLight = new THREE.DirectionalLight(0xffffff);
+            directionalLight.position.set(0, -70, 100).normalize();
+            this.scene.add(directionalLight);
+            
+            const directionalLight2 = new THREE.DirectionalLight(0xffffff);
+            directionalLight2.position.set(0, 70, 100).normalize();
+            this.scene.add(directionalLight2);
+            
+            // use the three.js GLTF loader to add the 3D model to the three.js scene
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                'https://docs.mapbox.com/mapbox-gl-js/assets/34M_17/34M_17.gltf',
+                (gltf) => {
+                    this.scene.add(gltf.scene);
+                }
+            );
+            this.map = map;
+    
+            // use the Mapbox GL JS map canvas for three.js
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: map.getCanvas(),
+                context: gl,
+                antialias: true
+            }); 
+    
+            this.renderer.autoClear = false;
+        },
+        render: function (gl, matrix) {
+            const rotationX = new THREE.Matrix4().makeRotationAxis(
+                new THREE.Vector3(1, 0, 0),
+                modelTransform.rotateX
+            );
+            const rotationY = new THREE.Matrix4().makeRotationAxis(
+                new THREE.Vector3(0, 1, 0),
+                modelTransform.rotateY
+            );
+            const rotationZ = new THREE.Matrix4().makeRotationAxis(
+                new THREE.Vector3(0, 0, 1),
+                modelTransform.rotateZ
+            );
+    
+            const m = new THREE.Matrix4().fromArray(matrix);
+            const l = new THREE.Matrix4()
+                .makeTranslation(
+                    modelTransform.translateX,
+                    modelTransform.translateY,
+                    modelTransform.translateZ
+                )
+                .scale(
+                    new THREE.Vector3(
+                        modelTransform.scale,
+                        -modelTransform.scale,
+                        modelTransform.scale
+                    )
+                )
+                .multiply(rotationX)
+                .multiply(rotationY)
+                .multiply(rotationZ);
+    
+            this.camera.projectionMatrix = m.multiply(l);
+            this.renderer.resetState();
+            this.renderer.render(this.scene, this.camera);
+            this.map.triggerRepaint();
+        }
+    };
+
+
+    map.on('style.load', () => {
+        map.setFog({}); // Set the default atmosphere style
+        
+        map.addLayer(customLayer, 'waterway-label'); // Add a 3D model
+
+        // Add 3D terrain to a map
+        map.addSource('mapbox-dem', {
+            'type': 'raster-dem',
+            'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+            'tileSize': 512,
+            'maxzoom': 14
+        });
+        
+        // // add the DEM source as a terrain layer with exaggerated height
+        map.setTerrain({ 'source': 'mapbox-dem', 'exaggeration': 1.2 });
+    });
+    
+
+
+    ///////////////////     3 Circles and Check Box Section        ////////////////////////////////////////////////////////////////////////////////////////
+    var checkbox = document.getElementById("checkbox");
+    var isCheckboxChecked = false;
+
+    // Event listener for the checkbox
+    checkbox.addEventListener('change', function() {
+        isCheckboxChecked = checkbox.checked;
+
+        if (isCheckboxChecked) {
+            // Add the 'click' event listener
+            map.on('click', createCircles);
+        } else {
+            // Remove the 'click' event listener
+            map.off('click', createCircles);
+
+            // Remove the circles
+            removeCircles();
+        }
+    });
+
+    function createCircles(e) {
+        var lngLat = e.lngLat;
+
+        removeCircles();
+
+        // Create new circle layers
+        map.addLayer({
+            id: 'circle3',
+            type: 'circle',
+            source: {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [lngLat.lng, lngLat.lat]
+                    }
+                }
+            },
+            paint: {
+                'circle-radius': {
+                    type: 'exponential',
+                    stops: [
+                        [0, 0],
+                        [17, 300000] // Radius of 300km (in meters) at zoom level 16
+                    ],
+                    base: 2
+                },
+                'circle-color': 'rgba(255, 0, 0, 0.3)'
+            }
+        });
+
+        map.addLayer({
+            id: 'circle2',
+            type: 'circle',
+            source: {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [lngLat.lng, lngLat.lat]
+                    }
+                }
+            },
+            paint: {
+                'circle-radius': {
+                    type: 'exponential',
+                    stops: [
+                        [0, 0],
+                        [17, 200000] // Radius of 200km (in meters) at zoom level 16
+                    ],
+                    base: 2
+                },
+                'circle-color': 'rgba(0, 255, 0, 0.3)'
+            }
+        });
+
+        map.addLayer({
+            id: 'circle',
+            type: 'circle',
+            source: {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [lngLat.lng, lngLat.lat]
+                    }
+                }
+            },
+            paint: {
+                'circle-radius': {
+                    type: 'exponential',
+                    stops: [
+                        [0, 0],
+                        [17, 100000] // Radius of 100km (in meters) at zoom level 16
+                    ],
+                    base: 2
+                },
+                'circle-color': 'rgba(0, 0, 255, 0.5)'
+            }
+        });
+    }
+
+    function removeCircles() {
+        // Remove the circles
+        map.removeLayer('circle');
+        map.removeLayer('circle2');
+        map.removeLayer('circle3');
+
+        // Remove the circle sources
+        if (map.getSource('circle')) {
+            map.removeSource('circle');
+        }
+        if (map.getSource('circle2')) {
+            map.removeSource('circle2');
+        }
+        if (map.getSource('circle3')) {
+            map.removeSource('circle3');
+        }
+    }
+
+
+     ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // When a click event occurs on a feature in the places layer, open a popup at the
+    // location of the feature, with description HTML from its properties.
+    map.on('click', 'diesel-layer', (e) => {
+        const coordinates = e.features[0].geometry.coordinates.slice();
+        const title = e.features[0].properties.title;
+        const address = e.features[0].properties.Address;
+        const station = e.features[0].properties.Station;
+
+        // Ensure that if the map is zoomed out such that multiple
+        // copies of the feature are visible, the popup appears
+        // over the copy being pointed to.
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+
+        new mapboxgl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(`
+            <h3>${title}</h3>
+            <p><strong>Address:</strong> ${address}</p>
+            <p><strong>Station:</strong> ${station}</p>
+            `)
+            .addTo(map);
+    });
+
+    map.on('mouseenter', 'diesel-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'diesel-layer', () => {
+        map.getCanvas().style.cursor = '';
+    });
+
+
+
+    map.on('click', 'biodiversity-layer', (e) => {
+    const geometry = e.features[0].geometry;
+    
+    // Compute the centroid of the polygon.
+    const centroid = turf.centroid(geometry);
+    const coordinates = centroid.geometry.coordinates;
+
+    const reserve_name = e.features[0].properties.RESNAME; // Adjusted to match your data's properties
+
+    new mapboxgl.Popup()
+        .setLngLat(coordinates)
+        .setHTML(`
+        <h3>${reserve_name}</h3>
+        `) // Removed other properties as they don't exist in the provided snippet
+        .addTo(map);
+    });
+
+    map.on('mouseenter', 'biodiversity-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'biodiversity-layer', () => {
+        map.getCanvas().style.cursor = '';
+    });
+
+
+    map.on('click', 'aboriginalland-layer', (e) => {
+    const geometry = e.features[0].geometry;
+    
+    // Compute the centroid of the polygon.
+    const centroid = turf.centroid(geometry);
+    const coordinates = centroid.geometry.coordinates;
+
+    const reserve_name = e.features[0].properties.LOCALITY; // Adjusted to match your data's properties
+
+    new mapboxgl.Popup()
+        .setLngLat(coordinates)
+        .setHTML(`
+        <h3>${reserve_name}</h3>
+        `) // Removed other properties as they don't exist in the provided snippet
+        .addTo(map);
+    });
+
+    map.on('mouseenter', 'aboriginalland-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'aboriginalland-layer', () => {
+        map.getCanvas().style.cursor = '';
+    });
+
+
+
+
+
+    map.on('click', 'publichospital-layer', (e) => {
+        const coordinates = e.features[0].geometry.coordinates.slice();
+        const title = e.features[0].properties.Hospital;
+        const type = e.features[0].properties.Type;
+        const address = e.features[0].properties.Address;
+
+
+        // Ensure that if the map is zoomed out such that multiple
+        // copies of the feature are visible, the popup appears
+        // over the copy being pointed to.
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+
+        new mapboxgl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(`
+            <h3>${title}</h3>
+            <p><strong>Type:</strong> ${type}</p>
+            <p><strong>Address:</strong> ${address}</p>
+            `)
+            .addTo(map);
+    });
+
+    map.on('mouseenter', 'publichospital-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'publichospital-layer', () => {
+        map.getCanvas().style.cursor = '';
+    });
+
+
+
+
+
+
+
+
+
+    map.on('load', () => {
+        map.addSource('state-border', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.geojson'
+        });
+        
+        // Australian state borders
+        map.addLayer({
+            'id': 'state-border-layer',
+            'type': 'line',
+            'source': 'state-border',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'line-width': 1,
+                // Use a get expression (https://docs.mapbox.com/mapbox-gl-js/style-spec/#expressions-get)
+                // to set the line-color to a feature property value.
+                'line-color': 'blue' // Set the line color to red
+            }
+        });
+
+        // Diesel Part
+        map.addSource('diesel', { //load diesel data
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/dieseloutput.geojson'
+        });
+
+        map.loadImage( //load diesel icon
+            'https://cdn4.iconfinder.com/data/icons/nuuline-fill-car-parts-service-repair/150/service_repair_automotive-46-512.png',
+            (error, image) => {
+            if (error) throw error;
+            
+            // Add the image to the map style.
+            map.addImage('fuel-icon', image);
+        });
+    
+        map.addLayer({
+            'id': 'diesel-layer',
+            'type': 'symbol',
+            'source': 'diesel', // reference the data source
+            'layout': {
+                'visibility': 'visible', // Make the layer visible by default.
+                'icon-image': 'fuel-icon', // reference the image
+                'icon-size': 0.04
+                }
+            });
+        
+
+        // Primary School Part
+        map.addSource('primschool', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/primschool.geojson'
+        });
+
+        map.loadImage( //load primary school icon
+            'https://cdn2.iconfinder.com/data/icons/flat-pack-1/64/Education-1024.png',
+            (error, image) => {
+            if (error) throw error;
+            
+            // Add the image to the map style.
+            map.addImage('school-icon', image);
+        });
+
+        map.addLayer({
+            'id': 'primschool-layer',
+            'type': 'symbol',
+            'source': 'primschool',
+            'layout': {
+                'visibility': 'visible', // Make the layer visible by default.
+                'icon-image': 'school-icon', // reference the image
+                'icon-size': 0.02
+            }
+        });
+
+
+
+        map.addSource('publichospital', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/Publichospitals.geojson'
+        });
+
+        map.loadImage(
+            'https://cdn3.iconfinder.com/data/icons/clinical-3/96/medic-1024.png',
+            (error, image) => {
+            if (error) throw error;
+            
+            // Add the image to the map style.
+            map.addImage('hospital-icon', image);
+        });
+
+        map.addLayer({
+            'id': 'publichospital-layer',
+            'type': 'symbol',
+            'source': 'publichospital',
+            'layout': {
+                'visibility': 'visible', // Make the layer visible by default.
+                'icon-image': 'hospital-icon', // reference the image
+                'icon-size': 0.02
+            }
+        });
+
+
+        // polygon shape
+        map.addSource('irrigationarea', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/IrrigationAreas_GDA2020.geojson'
+        });
+
+        map.addLayer({
+            'id': 'irrigationarea-layer',
+            'type': 'fill',
+            'source': 'irrigationarea',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'fill-color': '#0080ff', // blue color fill
+                'fill-opacity': 0.5
+            }
+        });
+
+
+         // polygon shape
+        map.addSource('biodiversity', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/CONSERVATION_NpwsaReserves_GDA2020.geojson'
+        });
+
+        map.addLayer({
+            'id': 'biodiversity-layer',
+            'type': 'fill',
+            'source': 'biodiversity',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'fill-color': '#34eb49', // green color fill
+                'fill-opacity': 0.6
+            }
+        });
+
+
+        // polygon shape
+        map.addSource('aboriginalland', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/ADMIN_AboriginalLands.geojson'
+        });
+
+        map.addLayer({
+            'id': 'aboriginalland-layer',
+            'type': 'fill',
+            'source': 'aboriginalland',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'fill-color': '#99390f', // brown color fill
+                'fill-opacity': 0.6
+            }
+        });
+
+
+        // polygon shape
+         map.addSource('ironsoil', {
+            type: 'geojson',
+            // data: 'https://drive.google.com/uc?export=download&id=1ge10L9kzAKfS7gOgPJ_TfJJkva1Gnlw7'
+        });
+
+        map.addLayer({
+            'id': 'ironsoil-layer',
+            'type': 'fill',
+            'source': 'ironsoil',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'fill-color': '#eb34eb', // 
+                'fill-opacity': 0.6
+            }
+        });
+
+     
+        // railway part
+        map.addSource('railway', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/railoutput.geojson'
+        });
+
+        map.addLayer({
+            'id': 'railway-line-layer',
+            'type': 'line',
+            'source': 'railway',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'line-width': 0.5,
+                // Use a get expression (https://docs.mapbox.com/mapbox-gl-js/style-spec/#expressions-get)
+                // to set the line-color to a feature property value.
+                'line-color': 'black' // Set the line color to red
+            }
+        });
+
+
+        // road part
+        map.addSource('road', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/data/StateMaintainedRoads.geojson'
+        });
+        
+        map.addLayer({
+            'id': 'road-line-layer',
+            'type': 'line',
+            'source': 'road',
+            'layout': {
+                'visibility': 'visible' // Make the layer visible by default.
+            },
+            'paint': {
+                'line-width': 1,
+                // Use a get expression (https://docs.mapbox.com/mapbox-gl-js/style-spec/#expressions-get)
+                // to set the line-color to a feature property value.
+                'line-color': 'white' // Set the line color to red
+            }
+        });
+
+
+        // DTA LOGO
+        map.loadImage(
+            'https://raw.githubusercontent.com/Digital-Twinning-Australia/Critical-Minerals-Project/main/resource/DTA%20LOGO.JPG',
+            (error, image) => {
+            if (error) throw error;
+            
+            // Add the image to the map style.
+            map.addImage('LOGO', image);
+            
+            // Add a data source containing one point feature.
+            map.addSource('point', {
+                'type': 'geojson',
+                'data': {
+                    'type': 'FeatureCollection',
+                    'features': [{
+                        'type': 'Feature',
+                        'geometry': {
+                            'type': 'Point',
+                            'coordinates': [138.60508569191964, -34.92571784010129]
+                        }
+                    }]
+                }
+            });
+
+        // Add a layer to use the image to represent the data.
+        map.addLayer({
+            'id': 'points',
+            'type': 'symbol',
+            'source': 'point', // reference the data source
+            'layout': {
+                'icon-image': 'LOGO', // reference the image
+                'icon-size': 0.1
+            }
+            });
+            }
+        );
+    });
+
+
+
+
+    // After the last frame rendered before the map enters an "idle" state.
+    map.on('idle', () => {
+        // TODO: modify this code, add more layers.             If these two layers were not added to the map, abort
+        // if (!map.getLayer('earthquakes-layer')) {
+        //     return;
+        // }
+    
+        // Enumerate ids of the layers.
+        const toggleableLayerIds = ['diesel-layer', 'primschool-layer', 'publichospital-layer', 'irrigationarea-layer', 'biodiversity-layer', 'aboriginalland-layer','ironsoil-layer','railway-line-layer', 'road-line-layer'];
+        
+        // Set up the corresponding toggle button for each layer.
+        for (const id of toggleableLayerIds) {
+            // Skip layers that already have a button set up.
+            if (document.getElementById(id)) {
+                continue;
+            }
+        
+            // Create a link.
+            const link = document.createElement('a');
+            link.id = id;
+            link.href = '#';
+            link.textContent = id;
+            link.className = 'active';
+            
+            // Show or hide layer when the toggle is clicked.
+            link.onclick = function (e) {
+                const clickedLayer = this.textContent;
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const visibility = map.getLayoutProperty(
+                    clickedLayer,
+                    'visibility'
+                );
+        
+                // Toggle layer visibility by changing the layout object's visibility property.
+                if (visibility === 'visible') {
+                    map.setLayoutProperty(clickedLayer, 'visibility', 'none');
+                    this.className = '';
+                } else {
+                    this.className = 'active';
+                    map.setLayoutProperty(
+                        clickedLayer,
+                        'visibility',
+                        'visible'
+                    );
+                }
+            };
+        
+            const layers = document.getElementById('menu');
+            layers.appendChild(link);
+        }
+
+
+
+    });
+
+</script>
+ 
+</body>
+</html>
+

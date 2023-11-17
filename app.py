@@ -112,7 +112,7 @@ st.write("")
 col1, col2, col3 = st.columns([6,1,3])
 
 with col1:
-    st.components.v1.iframe("https://green-coast-0bf4a5b00.4.azurestaticapps.net", width=850, height=700)
+    st.components.v1.iframe("https://green-coast-0bf4a5b00.4.azurestaticapps.net", width=750, height=700)
 with col3:
     st.markdown("<h3 style='color: white;'>Analytics</h3>", unsafe_allow_html=True)
     chart_data = pd.DataFrame(np.random.randn(20, 3), columns=["Copper", "Iron ore", "Gypsum"])
